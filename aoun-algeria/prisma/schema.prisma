@@ -1,0 +1,449 @@
+// عون الجزائر - Aoun Algeria
+// Prisma schema
+
+generator client {
+  provider      = "prisma-client-js"
+  // "native" for local dev, "rhel-openssl-3.0.x" so the client also works
+  // in Vercel's Linux serverless runtime (a very common cause of
+  // "Query Engine not found" errors when deploying Prisma to Vercel).
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== ENUMS ====================
+
+enum Role {
+  USER
+  VOLUNTEER
+  ORGANIZATION
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum HelpType {
+  FOOD
+  WATER
+  CLOTHES
+  BLANKETS
+  SCHOOL_SUPPLIES
+  BABY_SUPPLIES
+  FURNITURE
+  TRANSPORT
+  SHELTER
+  ELDERLY_CARE
+  DISABILITY_CARE
+  OTHER
+}
+
+enum UrgencyLevel {
+  NORMAL
+  IMPORTANT
+  URGENT
+}
+
+enum RequestStatus {
+  PENDING_REVIEW
+  APPROVED
+  IN_PROGRESS
+  COMPLETED
+  REJECTED
+  CLOSED
+}
+
+enum OfferType {
+  DONATE_MATERIALS
+  PROVIDE_TRANSPORT
+  PROVIDE_STORAGE
+  VOLUNTEER
+  PROVIDE_WATER
+  PROVIDE_FOOD
+  PROVIDE_CLOTHES
+  PROVIDE_SCHOOL_SUPPLIES
+  PROVIDE_BLANKETS
+  PROVIDE_COLLECTION_POINT
+}
+
+enum PointStatus {
+  ACTIVE
+  INACTIVE
+  FULL
+  CLOSED
+}
+
+enum OrganizationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+enum NotificationType {
+  REQUEST_APPROVED
+  CONTRIBUTION_RECORDED
+  URGENT_IN_YOUR_AREA
+  NEW_CAMPAIGN
+  GENERAL
+}
+
+enum ReportStatus {
+  OPEN
+  REVIEWED
+  DISMISSED
+  ACTION_TAKEN
+}
+
+// ==================== GEOGRAPHY ====================
+
+model Wilaya {
+  id        String   @id @default(cuid())
+  code      String   @unique // "01".."58"
+  nameAr    String
+  nameFr    String
+  nameEn    String?
+  communes  Commune[]
+
+  helpRequests        HelpRequest[]
+  helpOffers          HelpOffer[]
+  collectionPoints    CollectionPoint[]
+  storagePoints       StoragePoint[]
+  distributionPoints  DistributionPoint[]
+  volunteers          Volunteer[]
+  organizations       Organization[]
+  campaigns           Campaign[]
+
+  createdAt DateTime @default(now())
+}
+
+model Commune {
+  id        String   @id @default(cuid())
+  nameAr    String
+  nameFr    String?
+  wilayaId  String
+  wilaya    Wilaya   @relation(fields: [wilayaId], references: [id], onDelete: Cascade)
+
+  helpRequests        HelpRequest[]
+  helpOffers          HelpOffer[]
+  collectionPoints    CollectionPoint[]
+  storagePoints       StoragePoint[]
+  distributionPoints  DistributionPoint[]
+  volunteers          Volunteer[]
+
+  createdAt DateTime @default(now())
+
+  @@index([wilayaId])
+}
+
+// ==================== USERS ====================
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  phone         String?
+  passwordHash  String?
+  image         String?
+  role          Role      @default(USER)
+  isDemo        Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  helpRequests      HelpRequest[]
+  helpOffers        HelpOffer[]
+  volunteer         Volunteer?
+  organization      Organization?
+  notifications     Notification[]
+  reportsFiled      Report[]        @relation("ReportedBy")
+  campaignsJoined   CampaignParticipant[]
+  auditLogs         AuditLog[]
+  verifications     Verification[] @relation("VerifiedBy")
+
+  accounts Account[]
+  sessions Session[]
+}
+
+// NextAuth adapter tables
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ==================== HELP REQUESTS / OFFERS ====================
+
+model HelpRequest {
+  id            String        @id @default(cuid())
+  userId        String?
+  user          User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  wilayaId      String
+  wilaya        Wilaya        @relation(fields: [wilayaId], references: [id])
+  communeId     String
+  commune       Commune       @relation(fields: [communeId], references: [id])
+
+  helpType      HelpType
+  description   String        @db.Text
+  urgency       UrgencyLevel  @default(NORMAL)
+
+  // Approximate location only — never exact address, per privacy rules
+  approxLat     Float?
+  approxLng     Float?
+
+  imageUrl      String?
+  contactMethod String        // stored, never rendered publicly
+  contactHidden Boolean       @default(true)
+
+  status        RequestStatus @default(PENDING_REVIEW)
+  isDemo        Boolean       @default(false)
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  reports       Report[]
+  verification  Verification?
+
+  @@index([wilayaId, status])
+  @@index([urgency])
+}
+
+model HelpOffer {
+  id            String     @id @default(cuid())
+  userId        String?
+  user          User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  wilayaId      String
+  wilaya        Wilaya     @relation(fields: [wilayaId], references: [id])
+  communeId     String
+  commune       Commune    @relation(fields: [communeId], references: [id])
+
+  offerType     OfferType
+  capacity      String?    // free text: "500 kg", "van 7 seats", etc.
+  description   String     @db.Text
+  contactMethod String
+
+  isDemo        Boolean    @default(false)
+  createdAt     DateTime   @default(now())
+
+  @@index([wilayaId, offerType])
+}
+
+// ==================== POINTS ====================
+
+model CollectionPoint {
+  id            String      @id @default(cuid())
+  name          String
+  wilayaId      String
+  wilaya        Wilaya      @relation(fields: [wilayaId], references: [id])
+  communeId     String
+  commune       Commune     @relation(fields: [communeId], references: [id])
+  address       String
+  lat           Float
+  lng           Float
+  workingHours  String?
+  neededHelp    HelpType[]
+  status        PointStatus @default(ACTIVE)
+  organizationId String?
+  organization  Organization? @relation(fields: [organizationId], references: [id])
+  isDemo        Boolean     @default(false)
+  createdAt     DateTime    @default(now())
+
+  @@index([wilayaId])
+}
+
+model StoragePoint {
+  id             String      @id @default(cuid())
+  name           String
+  wilayaId       String
+  wilaya         Wilaya      @relation(fields: [wilayaId], references: [id])
+  communeId      String
+  commune        Commune     @relation(fields: [communeId], references: [id])
+  address        String
+  lat            Float
+  lng            Float
+  storageCapacity String?
+  acceptedMaterials HelpType[]
+  acceptsTrucks  Boolean     @default(false)
+  workingHours   String?
+  status         PointStatus @default(ACTIVE)
+  isDemo         Boolean     @default(false)
+  createdAt      DateTime    @default(now())
+
+  @@index([wilayaId])
+}
+
+model DistributionPoint {
+  id              String      @id @default(cuid())
+  name            String
+  wilayaId        String
+  wilaya          Wilaya      @relation(fields: [wilayaId], references: [id])
+  communeId       String
+  commune         Commune     @relation(fields: [communeId], references: [id])
+  address         String
+  lat             Float
+  lng             Float
+  helpTypes       HelpType[]
+  beneficiaryGroup String?
+  distributionTimes String?
+  status          PointStatus @default(ACTIVE)
+  isDemo          Boolean     @default(false)
+  createdAt       DateTime    @default(now())
+
+  @@index([wilayaId])
+}
+
+// ==================== VOLUNTEERS & ORGANIZATIONS ====================
+
+model Volunteer {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  wilayaId      String
+  wilaya        Wilaya   @relation(fields: [wilayaId], references: [id])
+  communeId     String
+  commune       Commune  @relation(fields: [communeId], references: [id])
+
+  helpTypes     HelpType[]
+  canTransport  Boolean  @default(false)
+  canStore      Boolean  @default(false)
+  canDistribute Boolean  @default(false)
+  available     Boolean  @default(true)
+
+  isDemo        Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  @@index([wilayaId])
+}
+
+model Organization {
+  id             String             @id @default(cuid())
+  userId         String             @unique
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name           String
+  wilayaId       String
+  wilaya         Wilaya             @relation(fields: [wilayaId], references: [id])
+  activityField  String
+  lat            Float?
+  lng            Float?
+  contactMethods String
+  status         OrganizationStatus @default(PENDING)
+
+  collectionPoints CollectionPoint[]
+  campaigns        Campaign[]
+
+  isDemo         Boolean            @default(false)
+  createdAt      DateTime           @default(now())
+
+  @@index([wilayaId])
+}
+
+// ==================== CAMPAIGNS ====================
+
+model Campaign {
+  id             String    @id @default(cuid())
+  title          String
+  description    String    @db.Text
+  wilayaId       String
+  wilaya         Wilaya    @relation(fields: [wilayaId], references: [id])
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+
+  helpTypes      HelpType[]
+  targetAmount   Int       @default(0)
+  fulfilledAmount Int      @default(0)
+  unit           String    @default("وحدة")
+
+  isActive       Boolean   @default(true)
+  isDemo         Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+
+  participants CampaignParticipant[]
+
+  @@index([wilayaId])
+}
+
+model CampaignParticipant {
+  id         String   @id @default(cuid())
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt   DateTime @default(now())
+
+  @@unique([campaignId, userId])
+}
+
+// ==================== SUPPORT MODELS ====================
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  @@index([userId, read])
+}
+
+model Report {
+  id            String       @id @default(cuid())
+  helpRequestId String?
+  helpRequest   HelpRequest? @relation(fields: [helpRequestId], references: [id], onDelete: Cascade)
+  reportedById  String
+  reportedBy    User         @relation("ReportedBy", fields: [reportedById], references: [id])
+  reason        String       @db.Text
+  status        ReportStatus @default(OPEN)
+  createdAt     DateTime     @default(now())
+}
+
+model Verification {
+  id            String      @id @default(cuid())
+  helpRequestId String      @unique
+  helpRequest   HelpRequest @relation(fields: [helpRequestId], references: [id], onDelete: Cascade)
+  verifiedById  String
+  verifiedBy    User        @relation("VerifiedBy", fields: [verifiedById], references: [id])
+  decision      RequestStatus
+  note          String?     @db.Text
+  createdAt     DateTime    @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String
+  entity    String
+  entityId  String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+}
